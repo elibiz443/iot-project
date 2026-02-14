@@ -1,0 +1,9 @@
+RewriteEngine On
+
+# base
+RewriteBase /iot_project/
+
+# Remove .php extension for pages
+RewriteRule ^auth/register$ admin/views/auth/register.php [L]
+RewriteRule ^auth/login$ admin/views/auth/login.php [L]
+RewriteRule ^dashboard$ admin/views/dashboard/index.php [L]
