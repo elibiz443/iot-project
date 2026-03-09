@@ -48,15 +48,69 @@ function csrf_check(?string $t): bool {
   return isset($_SESSION['csrf']) && is_string($_SESSION['csrf']) && is_string($t) && hash_equals($_SESSION['csrf'], $t);
 }
 
-function flash_set(string $k, string $v): void {
-  $_SESSION['flash'][$k] = $v;
-}
-
+function flash_set(string $k, string $v): void { $_SESSION['flash'][$k] = $v; }
 function flash_get(string $k): string {
   if (!isset($_SESSION['flash'][$k])) return '';
   $v = (string) $_SESSION['flash'][$k];
   unset($_SESSION['flash'][$k]);
   return $v;
+}
+function h(string $v): string { return htmlspecialchars($v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
+function safe_json_decode(?string $s) { if (!$s) return null; $d = json_decode($s, true); return is_array($d) ? $d : null; }
+function input_json(): array { $raw = file_get_contents('php://input') ?: ''; $d = json_decode($raw, true); return is_array($d) ? $d : []; }
+function iso_to_mysql(?string $iso): string {
+  if (!$iso) return gmdate('Y-m-d H:i:s');
+  try {
+    $dt = new DateTimeImmutable($iso);
+    return $dt->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+  } catch (Throwable $e) {
+    return gmdate('Y-m-d H:i:s');
+  }
+}
+function mysql_now_minus_seconds(int $seconds): string {
+  return gmdate('Y-m-d H:i:s', time() - max(0, $seconds));
+}
+function uploads_path(string $subdir): string {
+  $path = ROOT_PATH . '/uploads/' . trim($subdir, '/');
+  if (!is_dir($path)) mkdir($path, 0775, true);
+  return $path;
+}
+function uploads_url(string $subpath): string {
+  return ROOT_URL . '/uploads/' . ltrim($subpath, '/');
+}
+function require_device_token(): void {
+  if (!DEVICE_HTTP_ENABLED) json_out(['ok' => false, 'error' => 'device HTTP disabled'], 403);
+  $token = (string) ($_SERVER['HTTP_X_DEVICE_TOKEN'] ?? $_REQUEST['token'] ?? '');
+  if ($token === '' || !hash_equals(DEVICE_SHARED_TOKEN, $token)) {
+    json_out(['ok' => false, 'error' => 'unauthorized'], 401);
+  }
+}
+function upsert_device(PDO $pdo, string $deviceId, array $fields): void {
+  $current = [
+    ':device_id' => $deviceId,
+    ':online' => (int) ($fields['online'] ?? 1),
+    ':last_seen' => $fields['last_seen'] ?? gmdate('Y-m-d H:i:s'),
+    ':ip' => $fields['ip'] ?? null,
+    ':last_telemetry' => $fields['last_telemetry'] ?? null,
+    ':last_event' => $fields['last_event'] ?? null,
+    ':live_frame_url' => $fields['live_frame_url'] ?? null,
+    ':live_frame_path' => $fields['live_frame_path'] ?? null,
+    ':live_frame_updated_at' => $fields['live_frame_updated_at'] ?? null,
+  ];
+  $st = $pdo->prepare(" 
+    INSERT INTO iot_devices (device_id, online, last_seen, ip, last_telemetry, last_event, live_frame_url, live_frame_path, live_frame_updated_at)
+    VALUES (:device_id, :online, :last_seen, :ip, :last_telemetry, :last_event, :live_frame_url, :live_frame_path, :live_frame_updated_at)
+    ON DUPLICATE KEY UPDATE
+      online = VALUES(online),
+      last_seen = VALUES(last_seen),
+      ip = COALESCE(VALUES(ip), ip),
+      last_telemetry = COALESCE(VALUES(last_telemetry), last_telemetry),
+      last_event = COALESCE(VALUES(last_event), last_event),
+      live_frame_url = COALESCE(VALUES(live_frame_url), live_frame_url),
+      live_frame_path = COALESCE(VALUES(live_frame_path), live_frame_path),
+      live_frame_updated_at = COALESCE(VALUES(live_frame_updated_at), live_frame_updated_at)
+  ");
+  $st->execute($current);
 }
 
 try {
@@ -67,7 +121,7 @@ try {
   db_init($pdo);
 } catch (Throwable $e) {
   if (isset($_GET['api'])) json_out(['ok' => false, 'error' => $e->getMessage()], 500);
-  $msg = htmlspecialchars($e->getMessage(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+  $msg = h($e->getMessage());
   require ROOT_PATH . '/includes/header.php';
   echo '<div class="min-h-screen flex items-center justify-center p-6">';
   echo '<div class="max-w-xl w-full rounded-2xl border border-slate-800 bg-slate-900/40 p-6">';

@@ -131,15 +131,16 @@ $st_insert_evt = $pdo->prepare("
   VALUES (:device_id, :ts, :faces, :labels, :snapshot_url, :snapshot_path, :payload)
 ");
 
-function parse_topic(string $topic): array {
-  $p = explode('/', trim($topic, '/'));
-  if (count($p) < 4) return ['', ''];
-  if ($p[0] !== 'home' || $p[1] !== 'iot') return ['', ''];
-  $device = $p[2];
-  $type = $p[3] ?? '';
-  if ($type === 'status') {
-    $type = ($p[4] ?? '') === 'online' ? 'online' : 'status';
-  }
+function parse_topic(string $topic, string $topicRoot): array {
+  $topic = trim($topic, '/');
+  $root = trim($topicRoot, '/');
+  if ($root === '' || !str_starts_with($topic, $root . '/')) return ['', ''];
+  $rest = substr($topic, strlen($root) + 1);
+  $p = explode('/', $rest);
+  if (count($p) < 2) return ['', ''];
+  $device = $p[0];
+  $type = $p[1] ?? '';
+  if ($type === 'status') $type = ($p[2] ?? '') === 'online' ? 'online' : 'status';
   return [$device, $type];
 }
 
@@ -157,8 +158,8 @@ while (true) {
 
     $mqtt->connect($settings, true);
 
-    $mqtt->subscribe($topicRoot . '/+/telemetry', function (string $topic, string $message) use ($pdo, $st_upsert_device, $st_insert_tel) {
-      [$device, $type] = parse_topic($topic);
+    $mqtt->subscribe($topicRoot . '/+/telemetry', function (string $topic, string $message) use ($pdo, $st_upsert_device, $st_insert_tel, $topicRoot) {
+      [$device, $type] = parse_topic($topic, $topicRoot);
       if ($device === '' || $type !== 'telemetry') return;
 
       $data = safe_json_decode($message);
@@ -199,8 +200,8 @@ while (true) {
       $pdo->commit();
     }, 1);
 
-    $mqtt->subscribe($topicRoot . '/+/events', function (string $topic, string $message) use ($pdo, $st_upsert_device, $st_insert_evt) {
-      [$device, $type] = parse_topic($topic);
+    $mqtt->subscribe($topicRoot . '/+/events', function (string $topic, string $message) use ($pdo, $st_upsert_device, $st_insert_evt, $topicRoot) {
+      [$device, $type] = parse_topic($topic, $topicRoot);
       if ($device === '' || $type !== 'events') return;
 
       $data = safe_json_decode($message);
@@ -237,8 +238,8 @@ while (true) {
       $pdo->commit();
     }, 1);
 
-    $mqtt->subscribe($topicRoot . '/+/status/online', function (string $topic, string $message) use ($st_update_online) {
-      [$device, $type] = parse_topic($topic);
+    $mqtt->subscribe($topicRoot . '/+/status/online', function (string $topic, string $message) use ($st_update_online, $topicRoot) {
+      [$device, $type] = parse_topic($topic, $topicRoot);
       if ($device === '' || $type !== 'online') return;
 
       $online = trim($message) === '1' ? 1 : 0;

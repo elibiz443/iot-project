@@ -2,27 +2,21 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../../../includes/bootstrap.php';
-
 require_login();
-
-function safe_json_decode(?string $s) {
-  if (!$s) return null;
-  $d = json_decode($s, true);
-  return is_array($d) ? $d : null;
-}
 
 $api = isset($_GET['api']) ? (string) $_GET['api'] : '';
 if ($api === '') json_out(['ok' => false, 'error' => 'api required'], 400);
 
 if ($api === 'devices') {
-  $rows = $pdo->query("
-    SELECT device_id, online, last_seen, ip, last_telemetry, last_event, updated_at
+  $rows = $pdo->query(" 
+    SELECT device_id, online, last_seen, ip, last_telemetry, last_event, live_frame_url, live_frame_updated_at, updated_at
     FROM iot_devices
     ORDER BY updated_at DESC
   ")->fetchAll();
 
   $devices = [];
   foreach ($rows as $r) {
+    $liveFresh = $r['live_frame_updated_at'] && strtotime((string) $r['live_frame_updated_at']) >= strtotime(mysql_now_minus_seconds(LIVE_FRAME_TTL_SEC));
     $devices[] = [
       'device_id' => $r['device_id'],
       'online' => (int) $r['online'],
@@ -30,6 +24,8 @@ if ($api === 'devices') {
       'ip' => $r['ip'],
       'last_telemetry' => safe_json_decode($r['last_telemetry']),
       'last_event' => safe_json_decode($r['last_event']),
+      'live_frame_url' => $liveFresh ? $r['live_frame_url'] : null,
+      'live_frame_updated_at' => $r['live_frame_updated_at'],
     ];
   }
 
@@ -45,7 +41,7 @@ if ($api === 'history') {
   $tel_limit = max(30, min(2000, $tel_limit));
   $evt_limit = max(10, min(500, $evt_limit));
 
-  $st_tel = $pdo->prepare("
+  $st_tel = $pdo->prepare(" 
     SELECT ts, cpu_temp_c, uptime_s, disk_used_pct, ip, payload
     FROM iot_telemetry
     WHERE device_id = :d
@@ -56,8 +52,9 @@ if ($api === 'history') {
   $st_tel->bindValue(':n', $tel_limit, PDO::PARAM_INT);
   $st_tel->execute();
   $tel = array_reverse($st_tel->fetchAll());
+  foreach ($tel as &$t) $t['payload'] = safe_json_decode($t['payload']);
 
-  $st_evt = $pdo->prepare("
+  $st_evt = $pdo->prepare(" 
     SELECT ts, faces, labels, snapshot_url, snapshot_path, payload
     FROM iot_events
     WHERE device_id = :d
@@ -70,11 +67,43 @@ if ($api === 'history') {
   $evt = $st_evt->fetchAll();
 
   foreach ($evt as &$e) {
-    $e['labels'] = $e['labels'] ? json_decode($e['labels'], true) : [];
+    $e['labels'] = $e['labels'] ? json_decode((string) $e['labels'], true) : [];
     $e['payload'] = safe_json_decode($e['payload']);
   }
 
-  json_out(['ok' => true, 'telemetry' => $tel, 'events' => $evt]);
+  $st_cmd = $pdo->prepare(" 
+    SELECT id, command_name, command_payload, status, result_payload, queued_at, acked_at
+    FROM iot_commands WHERE device_id = :d ORDER BY id DESC LIMIT 20
+  ");
+  $st_cmd->execute([':d' => $device]);
+  $cmds = $st_cmd->fetchAll();
+  foreach ($cmds as &$c) {
+    $c['command_payload'] = safe_json_decode($c['command_payload']);
+    $c['result_payload'] = safe_json_decode($c['result_payload']);
+  }
+
+  json_out(['ok' => true, 'telemetry' => $tel, 'events' => $evt, 'commands' => $cmds]);
+}
+
+if ($api === 'command_send' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+  $in = input_json();
+  if (!csrf_check($in['csrf'] ?? '')) json_out(['ok' => false, 'error' => 'csrf'], 403);
+  $device = trim((string) ($in['device_id'] ?? ''));
+  $name = trim((string) ($in['command_name'] ?? ''));
+  $payload = isset($in['command_payload']) && is_array($in['command_payload']) ? $in['command_payload'] : [];
+  if ($device === '' || $name === '') json_out(['ok' => false, 'error' => 'device_id and command_name required'], 400);
+
+  upsert_device($pdo, $device, ['online' => 0, 'last_seen' => gmdate('Y-m-d H:i:s')]);
+
+  $st = $pdo->prepare("INSERT INTO iot_commands (device_id, command_name, command_payload, queued_by_user_id) VALUES (:d, :n, :p, :u)");
+  $st->execute([
+    ':d' => $device,
+    ':n' => $name,
+    ':p' => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ':u' => (int) $_SESSION['user']['id'],
+  ]);
+
+  json_out(['ok' => true, 'command_id' => (int) $pdo->lastInsertId()]);
 }
 
 json_out(['ok' => false, 'error' => 'unknown api'], 404);
