@@ -4,3 +4,49 @@ sudo apt install -y python3-picamera2
 sudo apt install -y python3-libcamera
 sudo apt install -y python3-picamera2 python3-libcamera
 ```
+
+```
+import requests
+
+TOKEN = "fb78ad63a5d1587dfc1c55507eccb29300a840c9d040afa3e99e2ec32cf3b4b7"
+BASE = "https://www.iot.ellyambet.com"
+
+headers = {
+  "X-Device-Token": TOKEN,
+  "Content-Type": "application/json",
+}
+
+r = requests.post(
+  f"{BASE}/admin/controllers/device_api.php?api=ingest",
+  headers=headers,
+  json={
+    "kind": "online",
+    "device_id": "test-device",
+    "online": True,
+    "ip": "127.0.0.1"
+  },
+  timeout=10
+)
+
+print("status:", r.status_code)
+print("body:", r.text)
+```
+
+```
+import requests
+
+TOKEN = "fb78ad63a5d1587dfc1c55507eccb29300a840c9d040afa3e99e2ec32cf3b4b7"
+BASE = "https://www.iot.ellyambet.com"
+
+with open("test.jpg", "rb") as f:
+  r = requests.post(
+    f"{BASE}/admin/controllers/device_api.php?api=upload_live_frame",
+    headers={"X-Device-Token": TOKEN},
+    data={"device_id": "test-device"},
+    files={"image": ("test.jpg", f, "image/jpeg")},
+    timeout=10
+  )
+
+print("status:", r.status_code)
+print("body:", r.text)
+```
