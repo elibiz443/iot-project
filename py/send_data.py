@@ -235,11 +235,19 @@ class Vision:
 
 class DeviceAgent:
   def __init__(self):
-    self.device_id = env_str("DEVICE_ID", hostname())
-    self.http_base = env_str("HTTP_BASE_URL", "https://www.iot.ellyambet.com").rstrip("/")
-    self.http_token = env_str("DEVICE_HTTP_TOKEN", "fb78ad63a5d1587dfc1c55507eccb29300a840c9d040afa3e99e2ec32cf3b4b7")
+    self.device_id = env_str("DEVICE_ID", hostname()).strip()
+    self.http_base = env_str("HTTP_BASE_URL", "https://www.iot.ellyambet.com").strip().rstrip("/")
+    self.http_token = env_str("DEVICE_HTTP_TOKEN", "fb78ad63a5d1587dfc1c55507eccb29300a840c9d040afa3e99e2ec32cf3b4b7").strip()
     self.http_enabled = bool(self.http_base and self.http_token and requests is not None)
     self.http_timeout = env_int("HTTP_TIMEOUT_SEC", 10)
+
+    self.session = requests.Session() if requests is not None else None
+    if self.session is not None:
+      self.session.headers.update({
+        "X-Device-Token": self.http_token,
+        "User-Agent": "curl/8.5.0",
+        "Accept": "*/*"
+      })
 
     self.mqtt_enabled = env_bool("MQTT_ENABLED", False)
     self.broker = env_str("MQTT_BROKER", "localhost")
@@ -338,24 +346,29 @@ class DeviceAgent:
       return False
 
   def headers(self):
-    return {"X-Device-Token": self.http_token} if self.http_enabled else {}
+    if not self.http_enabled:
+      return {}
+    return {
+      "X-Device-Token": self.http_token,
+      "User-Agent": "curl/8.5.0",
+      "Accept": "*/*"
+    }
 
   def http_json(self, api, body=None, method="POST", params=None):
-    if not self.http_enabled:
+    if not self.http_enabled or self.session is None:
       return None
     try:
       url = f"{self.http_base}/admin/controllers/device_api.php?api={api}"
       if method == "GET":
-        r = requests.get(
+        r = self.session.get(
           url,
-          headers=self.headers(),
           params=params,
           timeout=self.http_timeout
         )
       else:
-        r = requests.post(
+        r = self.session.post(
           url,
-          headers={**self.headers(), "Content-Type": "application/json"},
+          headers={"Content-Type": "application/json"},
           json=body,
           timeout=self.http_timeout
         )
@@ -367,15 +380,14 @@ class DeviceAgent:
     return None
 
   def http_file(self, api, image_bytes):
-    if not self.http_enabled:
+    if not self.http_enabled or self.session is None:
       return None
     try:
       url = f"{self.http_base}/admin/controllers/device_api.php?api={api}"
       files = {"image": ("frame.jpg", image_bytes, "image/jpeg")}
       data = {"device_id": self.device_id}
-      r = requests.post(
+      r = self.session.post(
         url,
-        headers=self.headers(),
         data=data,
         files=files,
         timeout=self.http_timeout
@@ -564,6 +576,10 @@ class DeviceAgent:
 
   def run(self):
     self.setup_logging()
+
+    if self.http_enabled:
+      self.log.info("HTTP base: %s", self.http_base)
+      self.log.info("HTTP token suffix: %s", self.http_token[-6:] if self.http_token else "NONE")
 
     if self.vision_mode in ("face", "yolo") and cv2 is not None:
       if self.vision_mode == "yolo" and (YOLO is None or not self.yolo_model):
