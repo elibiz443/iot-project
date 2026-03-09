@@ -26,6 +26,11 @@ try:
 except Exception:
   requests = None
 
+try:
+  from picamera2 import Picamera2
+except Exception:
+  Picamera2 = None
+
 
 def env_str(key, default=""):
   v = os.getenv(key)
@@ -112,30 +117,63 @@ class Vision:
     self.yolo_model_path = yolo_model_path
     self.face_min_size = face_min_size
     self.cap = None
+    self.picam2 = None
     self.model = None
     self.face = None
+    self.use_picamera2 = False
 
   def start(self):
     if cv2 is None:
       return False
-    self.cap = cv2.VideoCapture(self.camera_index)
-    if not self.cap.isOpened():
-      return False
-    self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-    self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+
+    if Picamera2 is not None:
+      try:
+        self.picam2 = Picamera2()
+        config = self.picam2.create_preview_configuration(
+          main={"size": (self.width, self.height), "format": "RGB888"}
+        )
+        self.picam2.configure(config)
+        self.picam2.start()
+        time.sleep(1)
+        self.use_picamera2 = True
+      except Exception:
+        self.picam2 = None
+        self.use_picamera2 = False
+
+    if not self.use_picamera2:
+      try:
+        self.cap = cv2.VideoCapture(self.camera_index, cv2.CAP_V4L2)
+        if not self.cap.isOpened():
+          self.cap.release()
+          self.cap = None
+          return False
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+      except Exception:
+        self.cap = None
+        return False
+
     if self.mode == "yolo" and YOLO is not None and self.yolo_model_path:
       try:
         self.model = YOLO(self.yolo_model_path)
       except Exception:
         self.model = None
+
     try:
       cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
       self.face = cv2.CascadeClassifier(cascade_path)
     except Exception:
       self.face = None
+
     return True
 
   def stop(self):
+    try:
+      if self.picam2 is not None:
+        self.picam2.stop()
+    except Exception:
+      pass
+
     try:
       if self.cap is not None:
         self.cap.release()
@@ -143,13 +181,24 @@ class Vision:
       pass
 
   def read(self):
+    if self.use_picamera2 and self.picam2 is not None:
+      try:
+        frame = self.picam2.capture_array()
+        if frame is None:
+          return None
+        return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+      except Exception:
+        return None
+
     if self.cap is None:
       return None
+
     ok, frame = self.cap.read()
     return frame if ok else None
 
   def detect(self, frame, conf_thr):
     detections, faces = [], 0
+
     if self.face is not None:
       try:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -162,6 +211,7 @@ class Vision:
         faces = 0 if found is None else len(found)
       except Exception:
         faces = 0
+
     if self.mode == "yolo" and self.model is not None:
       try:
         res = self.model(frame, verbose=False)[0]
@@ -179,6 +229,7 @@ class Vision:
           })
       except Exception:
         pass
+
     return detections, faces
 
 
@@ -211,8 +262,8 @@ class DeviceAgent:
     self.conf_thr = env_float("CONFIDENCE_THRESHOLD", 0.45)
     self.vision_mode = env_str("VISION_MODE", "face").strip().lower()
     self.camera_index = env_int("CAMERA_INDEX", 0)
-    self.cam_w = env_int("CAMERA_WIDTH", 640)
-    self.cam_h = env_int("CAMERA_HEIGHT", 480)
+    self.cam_w = env_int("CAMERA_WIDTH", 320)
+    self.cam_h = env_int("CAMERA_HEIGHT", 240)
     self.yolo_model = env_str("YOLO_MODEL", "")
     self.face_min_size = env_int("FACE_MIN_SIZE", 60)
 
@@ -310,8 +361,9 @@ class DeviceAgent:
         )
       if 200 <= r.status_code < 300:
         return r.json()
+      self.log.warning(f"HTTP {api} status={r.status_code} body={r.text[:300]}")
     except Exception as e:
-      self.log.debug(f"HTTP {api} failed: {e}")
+      self.log.warning(f"HTTP {api} failed: {e}")
     return None
 
   def http_file(self, api, image_bytes):
@@ -330,8 +382,9 @@ class DeviceAgent:
       )
       if 200 <= r.status_code < 300:
         return r.json()
+      self.log.warning(f"HTTP upload {api} status={r.status_code} body={r.text[:300]}")
     except Exception as e:
-      self.log.debug(f"HTTP upload {api} failed: {e}")
+      self.log.warning(f"HTTP upload {api} failed: {e}")
     return None
 
   def encode_jpeg(self, frame):
@@ -520,8 +573,11 @@ class DeviceAgent:
       if not self.vision.start():
         self.log.warning("Camera unavailable, running telemetry-only mode")
         self.vision_enabled = False
+      else:
+        self.log.info("Camera started successfully")
     else:
       self.vision_enabled = False
+      self.log.warning("Vision disabled because OpenCV is unavailable or mode is unsupported")
 
     if self.mqtt_enabled:
       self.client = self.build_mqtt()
@@ -548,7 +604,8 @@ class DeviceAgent:
         if self.http_enabled:
           self.poll_commands()
 
-      if self.vision_enabled and self.vision.cap is not None:
+      camera_ready = self.vision_enabled and (self.vision.use_picamera2 or self.vision.cap is not None)
+      if camera_ready:
         frame = self.vision.read()
         if frame is not None:
           self.last_frame = frame
