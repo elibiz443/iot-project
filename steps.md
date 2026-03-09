@@ -53,13 +53,13 @@ print("body:", r.text)
 
 ```
 curl -i --http1.1 "https://www.iot.ellyambet.com/admin/controllers/device_api.php?api=commands_poll&device_id=test-device" \
-  -H "X-Device-Token: YOUR_REAL_TOKEN"
+  -H "X-Device-Token: fb78ad63a5d1587dfc1c55507eccb29300a840c9d040afa3e99e2ec32cf3b4b7"
 ```
 
 ```
 curl -i --http1.1 -A "python-requests/2.31.0" \
   -X POST "https://www.iot.ellyambet.com/admin/controllers/device_api.php?api=ingest" \
-  -H "X-Device-Token: YOUR_REAL_TOKEN" \
+  -H "X-Device-Token: fb78ad63a5d1587dfc1c55507eccb29300a840c9d040afa3e99e2ec32cf3b4b7" \
   -H "Content-Type: application/json" \
   -d '{"kind":"online","device_id":"test-device","online":true,"ip":"127.0.0.1"}'
 ```
@@ -67,7 +67,7 @@ curl -i --http1.1 -A "python-requests/2.31.0" \
 ```
 import requests
 
-TOKEN = "YOUR_REAL_TOKEN"
+TOKEN = "fb78ad63a5d1587dfc1c55507eccb29300a840c9d040afa3e99e2ec32cf3b4b7"
 BASE = "https://www.iot.ellyambet.com"
 
 session = requests.Session()
