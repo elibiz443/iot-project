@@ -50,3 +50,45 @@ with open("test.jpg", "rb") as f:
 print("status:", r.status_code)
 print("body:", r.text)
 ```
+
+```
+curl -i --http1.1 "https://www.iot.ellyambet.com/admin/controllers/device_api.php?api=commands_poll&device_id=test-device" \
+  -H "X-Device-Token: YOUR_REAL_TOKEN"
+```
+
+```
+curl -i --http1.1 -A "python-requests/2.31.0" \
+  -X POST "https://www.iot.ellyambet.com/admin/controllers/device_api.php?api=ingest" \
+  -H "X-Device-Token: YOUR_REAL_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"kind":"online","device_id":"test-device","online":true,"ip":"127.0.0.1"}'
+```
+
+```
+import requests
+
+TOKEN = "YOUR_REAL_TOKEN"
+BASE = "https://www.iot.ellyambet.com"
+
+session = requests.Session()
+session.headers.update({
+  "X-Device-Token": TOKEN.strip(),
+  "User-Agent": "curl/8.5.0",
+  "Accept": "*/*",
+})
+
+r = session.post(
+  f"{BASE}/admin/controllers/device_api.php?api=ingest",
+  headers={"Content-Type": "application/json"},
+  json={
+    "kind": "online",
+    "device_id": "test-device",
+    "online": True,
+    "ip": "127.0.0.1"
+  },
+  timeout=10
+)
+
+print(r.status_code)
+print(r.text)
+```
